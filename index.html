@@ -2981,9 +2981,20 @@
       }
       state.role = "user";
       state.user = { name: trader.name, username: trader.handle, traderId: trader.id };
-      if (!state.traderProfile || state.user.traderId !== trader.id) {
-        state.traderProfile = { verificationStatus: trader.verified ? "approved" : "unverified", docs: trader.verified ? ["Broker-return-verified.pdf"] : [] };
-      }
+      // Always sync dashboard verification panel from trader profile
+      state.traderProfile = {
+        verificationStatus: trader.verified ? "approved" : (state.traderProfile?.verificationStatus === "pending" && state.traderProfile?._forTraderId === trader.id ? "pending" : "unverified"),
+        docs: trader.verified
+          ? (state.traderProfile?.docs?.length && state.traderProfile?._forTraderId === trader.id
+              ? state.traderProfile.docs
+              : ["Broker-return-verified.pdf", "Annual-performance-statement.pdf"])
+          : (state.traderProfile?._forTraderId === trader.id ? (state.traderProfile.docs || []) : []),
+        totalPL: trader.verified ? String(trader.avgYearlyReturnUSD ?? "") : (state.traderProfile?._forTraderId === trader.id ? (state.traderProfile.totalPL ?? "") : ""),
+        largestProfitYear: trader.verified ? String(trader.avgMonthlyReturnUSD ?? "") : (state.traderProfile?._forTraderId === trader.id ? (state.traderProfile.largestProfitYear ?? "") : ""),
+        largestProfitTicker: trader.verified ? String(trader.greatestProfitUSD ?? "") : (state.traderProfile?._forTraderId === trader.id ? (state.traderProfile.largestProfitTicker ?? "") : ""),
+        tickersTraded: trader.verified ? String(trader.tickersTraded ?? "") : (state.traderProfile?._forTraderId === trader.id ? (state.traderProfile.tickersTraded ?? "") : ""),
+        _forTraderId: trader.id
+      };
       closeModal("accountModal");
       refreshCurrentView();
       showToast(`Welcome back, @${trader.handle}.`);
@@ -3087,9 +3098,13 @@
         showToast("Enter Total P/L, Largest profit in a year, Largest profit in a ticker, and Number of tickers traded.");
         return;
       }
+      const wasApproved = state.traderProfile.verificationStatus === "approved";
       state.traderProfile.verificationStatus = "pending";
+      state.traderProfile.pendingResubmission = wasApproved;
       renderDashboard();
-      showToast("Verification submitted with performance record. In production, this would be reviewed manually or via broker API.");
+      showToast(wasApproved
+        ? "Updated performance and documents submitted for a new review."
+        : "Verification submitted with performance record. In production, this would be reviewed manually or via broker API.");
     }
     function approveVerificationDemo() {
       if (!state.user) return;
@@ -3097,11 +3112,15 @@
       if (!me) return;
       readVerificationPerformanceInputs();
       applyVerificationPerformanceToTrader(me);
+      const wasResubmit = !!state.traderProfile.pendingResubmission;
       state.traderProfile.verificationStatus = "approved";
+      state.traderProfile.pendingResubmission = false;
       me.verified = true;
       me.verifiedOn = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
       renderDiscover(); renderFeed(); renderDashboard();
-      showToast("Verification approved. Performance snapshot updated and verified badge added.");
+      showToast(wasResubmit
+        ? "Updated verification approved. Performance snapshot refreshed."
+        : "Verification approved. Performance snapshot updated and verified badge added.");
     }
     function saveTraderProfile() {
       if (!state.user) return; const me = getTrader(state.user.traderId); if (!me) return;
@@ -3643,6 +3662,20 @@
       }
       const me = getTrader(state.user.traderId);
       if (!me) { root.innerHTML = `<div class="panel"><div class="empty">Profile not found.</div></div>`; return; }
+      // Keep verification panel in sync, but preserve pending re-review submissions
+      if (me.verified && state.traderProfile.verificationStatus !== "pending") {
+        state.traderProfile.verificationStatus = "approved";
+        if (!state.traderProfile.docs || !state.traderProfile.docs.length) {
+          state.traderProfile.docs = ["Broker-return-verified.pdf", "Annual-performance-statement.pdf"];
+        }
+        if (state.traderProfile.totalPL === "" || state.traderProfile.totalPL == null) {
+          state.traderProfile.totalPL = String(me.avgYearlyReturnUSD ?? "");
+          state.traderProfile.largestProfitYear = String(me.avgMonthlyReturnUSD ?? "");
+          state.traderProfile.largestProfitTicker = String(me.greatestProfitUSD ?? "");
+          state.traderProfile.tickersTraded = String(me.tickersTraded ?? "");
+        }
+      }
+      state.traderProfile._forTraderId = me.id;
       const subscriptions = [...state.subscribed].map(id => getTrader(id)).filter(Boolean);
       root.innerHTML = `<div class="panel">
         <h2 class="section-title">Your Dashboard</h2>
@@ -3681,7 +3714,14 @@
               </div>
             </div>
             <div class="metric-box" style="margin-top:12px;"><div class="label">Uploaded documents</div><div class="value">${state.traderProfile.docs.length}</div><div class="muted" style="font-size:13px; margin-top:6px;">${state.traderProfile.docs.length ? state.traderProfile.docs.join(", ") : "No broker return documents uploaded yet."}</div></div>
-            <div class="actions" style="margin-top:16px;"><button class="btn secondary" onclick="uploadBrokerDocs()">Upload broker return document</button><button class="btn primary" onclick="submitVerification()">Submit for review</button></div>
+            <p class="muted" style="margin-top:12px; font-size:13px;">${
+              state.traderProfile.verificationStatus === "approved"
+                ? "You are verified. Update performance numbers and upload new broker documents, then submit again for a new review."
+                : state.traderProfile.verificationStatus === "pending"
+                  ? "Your submission is awaiting review. A demo admin can approve it below."
+                  : "Upload broker documents and submit performance numbers to request verification."
+            }</p>
+            <div class="actions" style="margin-top:12px;"><button class="btn secondary" onclick="uploadBrokerDocs()">Upload broker return document</button><button class="btn primary" onclick="submitVerification()">${state.traderProfile.verificationStatus === "approved" ? "Submit update for review" : "Submit for review"}</button></div>
             ${state.traderProfile.verificationStatus === "pending" ? `<div class="actions" style="margin-top:10px;"><button class="btn success" onclick="approveVerificationDemo()">Demo admin: approve verification</button></div>` : ""}
           </div>
           <div class="panel" style="background:var(--soft-2);">
